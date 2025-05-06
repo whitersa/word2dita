@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>内容转换工具</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>内容转换工具</h1>
+        <div class="alert alert-error" id="errorAlert"></div>
+        <div class="alert alert-success" id="successAlert"></div>
+        
+        <div class="content-wrapper">
+            <div class="input-section">
+                <h2>输入内容</h2>
+                <div id="pasteArea" class="paste-area" contenteditable="true" 
+                     data-placeholder="在此处粘贴Word或HTML内容..."></div>
+                <div class="button-group">
+                    <button id="clearBtn" title="清空所有内容">
+                        清空
+                    </button>
+                    <button id="transformBtn" title="转换内容格式">
+                        转换
+                    </button>
+                </div>
+            </div>
+
+            <div class="output-section">
+                <h2>转换结果</h2>
+                <div id="outputArea" class="output-area"></div>
+                <div class="button-group">
+                    <button id="copyBtn" title="复制转换结果">
+                        复制结果
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html> 
