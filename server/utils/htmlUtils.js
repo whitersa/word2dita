@@ -30,74 +30,67 @@ function cleanHtml(html) {
             // 移除 Word 特有的 class
             .replace(/class="?Mso[a-zA-Z]+"/g, '');
 
-        // 3. 清理样式，只保留指定样式
-        html = cleanSelectiveStyles(html);
+
         // 生成debug文件以查看第一阶段处理结果
+        // 4. 清理样式，只保留指定样式
+        html = cleanSelectiveStyles(html);
+
+        // 5. 添加列表层级class
+        html = addListLevelClasses(html);
+
+        // 6. 清理align属性
+        html = cleanAlignAttributes(html);
+        html = html.replace(/<font[^>]*>([\s\S]*?)<\/font>/gi, '$1')
+
+        // 7. 转换为嵌套列表
+        html = convertMsoListToNestedLists(html);
+
+
+        // 8. 清理特殊字符
+        html = html
+            // 替换 non-breaking spaces
+            .replace(/&nbsp;/g, ' ')
+
+        // 9. 移除空属性
+        html = html
+            .replace(/(\w+)="\s*"/g, '')
+            .replace(/\s+>/g, '>');
+
+
+        // 处理table，使用jsdom解析结构解析出一些参数信息，然后转换成dita的表格，因为jsdom会自动纠正不合法的标签，所以内容处理必须由字符串替换来实现
+
+        // 11. 最后处理表格，避免被JSDOM再次序列化
+        // html = cleanTables(html);
+        // div标签转换成p标签
+        html = html.replace(/<div[^>]*>/gi, '<p>');
+        html = html.replace(/<\/div>/gi, '</p>');
+
         try {
             require('fs').writeFileSync('debug_stage1.html', html);
         } catch (err) {
             console.error('Debug file write error:', err);
         }
-        // 4. 添加列表层级class
-        html = addListLevelClasses(html);
+        // 12. 清理标签
+        html = cleanEmptyTags(html);
 
-        // 5. 转换为嵌套列表
-        html = convertMsoListToNestedLists(html);
-
-        // 6. 清理非列表段落标签
-        html = cleanNonListParagraphs(html);
-
-        // 7. 清理标题标签的margin-left
-        html = cleanHeadingMargins(html);
-
-        // 8. 清理align属性
-        html = cleanAlignAttributes(html);
-
-        // 9. 清理标签
         html = html
-            // 移除空span标签
-            .replace(/<span>\s*<\/span>/gi, '')
             // 移除多余的换行标签
             .replace(/<br>\s*<br>/gi, '<br>')
             // 移除末尾的换行
             .replace(/<br>$/i, '')
             // 处理font标签，保留内容
-            .replace(/<font[^>]*>([\s\S]*?)<\/font>/gi, '$1')
+
+            // 处理span标签，保留内容
+            .replace(/<span[^>]*>([\s\S]*?)<\/span>/gi, '$1')
             // 处理s(删除线)标签，精确匹配并保留内容
             .replace(/<s>([\s\S]*?)<\/s>/gi, '$1');
+        // 清理属性
+        html = cleanClassAndIdAttributes(html);
 
-        // 10. 清理list内冗余的span标签
-        html = cleanRedundantSpans(html);
 
-        // 11. 清理特殊字符
-        html = html
-            // 替换 non-breaking spaces
-            .replace(/&nbsp;/g, ' ')
-            // 规范化引号
-            .replace(/[""]/g, '"')
-            .replace(/['']/g, "'");
 
-        // 12. 移除空属性
-        html = html
-            .replace(/(\w+)="\s*"/g, '')
-            .replace(/\s+>/g, '>');
-
-        // 13. 清理多余的空白
-        html = html
-            .replace(/>\s+</g, '><')
-            .trim();
-
-        // 14. 解码HTML实体，确保结构化处理基于原始HTML标签
-        html = html
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .replace(/&amp;/g, '&');
-
-        // 15. 结构化内容
-        html = structureContent(html);
-
-        // 16. 最后处理表格，避免被JSDOM再次序列化
-        html = cleanTables(html);
+        // 处理jsdom无法处理的特殊情况，所有需要规范html的处理都只能在此之前
+        html = doExtraTransformJsdomCantHandle(html);
 
 
 
@@ -108,48 +101,21 @@ function cleanHtml(html) {
     }
 }
 
+
 /**
- * 清理非列表段落标签
+ * 处理jsdom无法处理的特殊情况
  * @param {string} html - 要处理的HTML
  * @returns {string} - 处理后的HTML
  */
-function cleanNonListParagraphs(html) {
-    if (!html) return '';
-
-    try {
-        const dom = new JSDOM(`<!DOCTYPE html><html><body>${html}</body></html>`);
-        const document = dom.window.document;
-
-        // 处理所有p标签
-        const paragraphs = document.getElementsByTagName('p');
-        for (let p of paragraphs) {
-            const style = p.getAttribute('style') || '';
-
-            // 检查是否是列表项（是否包含mso-list样式）
-            if (!style.includes('mso-list:')) {
-                // 不是列表项，清理class和margin-left样式
-                p.removeAttribute('class');
-
-                if (style) {
-                    // 移除margin-left样式，保留其他样式
-                    const styles = style.split(';')
-                        .map(s => s.trim())
-                        .filter(s => s && !s.toLowerCase().startsWith('margin-left:'));
-
-                    if (styles.length > 0) {
-                        p.setAttribute('style', styles.join('; '));
-                    } else {
-                        p.removeAttribute('style');
-                    }
-                }
-            }
-        }
-
-        return document.body.innerHTML;
-    } catch (error) {
-        console.error('清理非列表段落标签错误:', error);
-        return html;
-    }
+function doExtraTransformJsdomCantHandle(html) {
+    html = processTables(html);
+    // 处理a标签，转换成带有scope=external的xref标签, 包括闭合a标签
+    html = html
+        .replace(/<a[^>]*href="([^"]+)"[^>]*>/gi, '<xref scope="external" format="html" href="$1">')
+        .replace(/<\/a>/gi, '</xref>');
+    // 3. 处理标题标签
+    html = cleanHeadingTags(html);
+    return html;
 }
 
 /**
@@ -235,648 +201,78 @@ function isBulletList(text) {
 }
 
 /**
- * Clean class and ID attributes
+ * 清理 class、id、align、valign、data-* 等属性
+ * @param {string} html - 要处理的HTML
+ * @returns {string} - 处理后的HTML
  */
-function cleanClassAndIdAttributes() {
-    const attributes = ['class', 'id'];
-    attributes.forEach(attr => {
-        const variations = [
-            ` ${attr} = `,
-            ` ${attr}= `,
-            ` ${attr} =`
-        ];
-
-        variations.forEach(variant => {
-            HTMLTransformer.replaceText(variant, ` ${attr}=`);
-        });
-
-        this.removeAttributeContent(attr);
-        HTMLTransformer.replaceText(` ${attr}=""`, '');
-    });
+function cleanClassAndIdAttributes(html) {
+    if (!html) return '';
+    // 移除 class、id、align、valign、data-* 属性（不区分单双引号/无值）
+    return html
+        // 匹配 class="..."、id='...'、align=...、valign=...、data-xxx=...（单双引号或无引号）
+        .replace(/\s+(class|id|align|valign|data-[^=\s]*)\s*=\s*(['"]).*?\2/gi, '')
+        .replace(/\s+(class|id|align|valign|data-[^=\s]*)\s*=\s*[^ >]+/gi, '');
 }
 
 /**
- * Clean empty tags from HTML
+ * 清理空标签，但保留可能影响布局的标签
+ * @param {string} html - 要处理的HTML
+ * @returns {string} - 处理后的HTML
  */
-function cleanEmptyTags(content) {
-    function removeEmptyTags(content) {
-        const chars = content.split('');
-        const result = [];
-        let state = 0;
-        let startIndex = 0;
-        let writeIndex = 0;
-        let inTable = false;  // 标记是否在表格内
+function cleanEmptyTags(html) {
+    if (!html) return '';
 
-        for (let i = 0; i < chars.length; i++) {
-            // 检查是否进入或离开表格
-            if (i + 5 < chars.length && chars.slice(i, i + 6).join('') === '<table') {
-                inTable = true;
-            } else if (i + 7 < chars.length && chars.slice(i, i + 8).join('') === '</table>') {
-                inTable = false;
+    try {
+        const dom = new JSDOM(`<!DOCTYPE html><html><body>${html}</body></html>`);
+        const document = dom.window.document;
+
+        // 需要保留的标签列表（即使为空也不删除）
+        const preserveTags = new Set([
+            'table', 'thead', 'tbody', 'tr', 'td', 'th',  // 表格相关
+            'ul', 'ol', 'li',  // 列表相关
+        ]);
+
+        // 递归处理元素
+        function processElement(element) {
+            // 如果元素没有子节点，直接返回
+            if (!element.hasChildNodes()) {
+                return;
             }
 
-            if (state === 0 && chars[i] === '<' && chars[i + 1] !== '/') {
-                state = 1;
-                startIndex = i;
-            }
+            const children = Array.from(element.childNodes);
+            for (const child of children) {
+                if (child.nodeType === 1) { // 元素节点
+                    const tagName = child.tagName.toLowerCase();
 
-            if (state === 2 && chars[i] === '>') {
-                // 只有在不在表格内时才移除空标签
-                if (!inTable) {
-                    for (let j = 0; j <= i - startIndex; j++) {
-                        result[j + startIndex] = '';
-                    }
-                    chars[i] = '';
-                } else {
-                    // 在表格内，保留所有标签
-                    for (let j = startIndex; j <= i; j++) {
-                        result[j] = chars[j];
-                    }
-                }
-                state = 0;
-            }
+                    // 递归处理子元素
+                    processElement(child);
 
-            if (state === 1 && chars[i] === '>') {
-                const isEmptyTag = chars[i - 2] !== '/' &&
-                    chars[i - 1] !== '/' &&
-                    chars[i + 1] === '<' &&
-                    chars[i + 2] === '/';
-                state = isEmptyTag ? 2 : 0;
-            }
+                    // 检查元素是否为空（没有文本内容和子元素）
+                    const isEmpty = !child.textContent.trim() &&
+                        !child.querySelector('img') &&
+                        !child.querySelector('br');
 
-            if (state !== 2 || inTable) {
-                result[writeIndex] = chars[i];
-                writeIndex++;
-            }
-        }
-
-        return result.join('');
-    }
-
-    /**
-     * Remove tags that only contain newlines
-     */
-    function removeNewlineTags(content) {
-        const chars = content.split('');
-        const result = [];
-        let state = 0;
-        let startIndex = 0;
-        let writeIndex = 0;
-        let inTable = false;  // 标记是否在表格内
-
-        for (let i = 0; i < chars.length; i++) {
-            // 检查是否进入或离开表格
-            if (i + 5 < chars.length && chars.slice(i, i + 6).join('') === '<table') {
-                inTable = true;
-            } else if (i + 7 < chars.length && chars.slice(i, i + 8).join('') === '</table>') {
-                inTable = false;
-            }
-
-            if (state === 0 && chars[i] === '<' && chars[i + 1] !== '/') {
-                state = 1;
-                startIndex = i;
-            }
-
-            if (state === 2 && chars[i] === '>') {
-                // 只有在不在表格内时才移除只包含换行的标签
-                if (!inTable) {
-                    for (let j = 0; j <= i - startIndex; j++) {
-                        result[j + startIndex] = '';
-                    }
-                    chars[i] = '';
-                } else {
-                    // 在表格内，保留所有标签
-                    for (let j = startIndex; j <= i; j++) {
-                        result[j] = chars[j];
-                    }
-                }
-                state = 0;
-            }
-
-            if (state === 1 && chars[i] === '>') {
-                const isNewlineTag = chars[i - 2] !== '/' &&
-                    chars[i - 1] !== '/' &&
-                    chars[i + 1] === '\\n' &&
-                    chars[i + 2] === '<' &&
-                    chars[i + 3] === '/';
-                state = isNewlineTag ? 2 : 0;
-            }
-
-            if (state !== 2 || inTable) {
-                result[writeIndex] = chars[i];
-                writeIndex++;
-            }
-        }
-
-        return result.join('');
-    }
-
-    function replaceText(content, searchText, replaceText) {
-        return content.replace(new RegExp(searchText, 'g'), replaceText);
-    }
-    content = replaceText(content, '> <', '><');
-    content = replaceText(content, '> \\n', '>\\n');
-    content = removeEmptyTags(content);
-    content = removeNewlineTags(content);
-    return content;
-}
-
-/**
-   * Clean &nbsp; tags
-   */
-function cleanNbspTags() {
-    const variations = [
-        '> &nbsp;<',
-        '>&nbsp; <'
-    ];
-
-    variations.forEach(variant => {
-        HTMLTransformer.replaceText(variant, '>&nbsp;<');
-    });
-
-    this.removeSingleNbspTags();
-}
-
-/**
- * Clean multiple &nbsp; occurrences
- */
-function cleanMultipleNbsp() {
-    const variations = [
-        '&nbsp;&nbsp;',
-        '&nbsp; ',
-        ' &nbsp;'
-    ];
-
-    variations.forEach(variant => {
-        HTMLTransformer.replaceText(variant, ' ');
-    });
-}
-
-/**
- * Clean HTML comments
- */
-function cleanComments() {
-    HTMLTransformer.replaceText('\\x3c!--', '&%&%&%&%&%!--');
-    this.removeTagContent('<', '>');
-    HTMLTransformer.replaceText('<>', ' ');
-    HTMLTransformer.replaceText('&%&%&%&%&%!--', '\\x3c!--');
-}
-
-/**
- * Remove all attributes except href and src
- */
-function cleanAllAttributes() {
-    const content = AppState.editor.currentText;
-    const chars = content.split('');
-    const result = [];
-    let state = 1;
-    let pos = 0;
-
-    for (let i = 0; i < chars.length; i++) {
-        const char = chars[i];
-
-        if (char === '<') {
-            state = this.determineTagState(chars, i);
-        } else if (char === ' ') {
-            state = this.updateStateOnSpace(state, chars, i);
-        } else if (char === '"') {
-            state = this.updateStateOnQuote(state);
-        } else if (char === '>' || (char === '/' && chars[i + 1] === '>')) {
-            state = 1;
-        }
-
-        if (this.shouldKeepChar(state)) {
-            result[pos++] = char;
-        }
-    }
-}
-
-/**
-     * Helper method to determine tag state
-     * @private
-     */
-function determineTagState(chars, index) {
-    if (chars[index + 1] === '!' &&
-        chars[index + 2] === '-' &&
-        chars[index + 3] === '-') {
-        return 1;
-    }
-    if (chars[index + 1] === 'a' && chars[index + 2] === ' ') {
-        return 4;
-    }
-    if (chars[index + 1] === 'i' &&
-        chars[index + 2] === 'm' &&
-        chars[index + 3] === 'g' &&
-        chars[index + 4] === ' ') {
-        return 14;
-    }
-    return 2;
-}
-
-/**
- * Helper method to update state on space character
- * @private
- */
-function updateStateOnSpace(currentState, chars, index) {
-    if (currentState === 2) return 3;
-    if (currentState === 4 || currentState === 5) {
-        if (this.isHrefAttribute(chars, index)) return 6;
-        if (this.isDownloadAttribute(chars, index)) return 6;
-        if (currentState === 4) return 5;
-    }
-    if (currentState === 14 || currentState === 15) {
-        if (this.isSrcAttribute(chars, index)) return 16;
-        if (currentState === 14) return 15;
-    }
-    if (currentState === 8 || currentState === 18) return 3;
-    return currentState;
-}
-
-/**
- * Helper method to check if chars form href attribute
- * @private
- */
-function isHrefAttribute(chars, index) {
-    return chars[index + 1] === 'h' &&
-        chars[index + 2] === 'r' &&
-        chars[index + 3] === 'e' &&
-        chars[index + 4] === 'f';
-}
-
-/**
- * Helper method to check if chars form src attribute
- * @private
- */
-function isSrcAttribute(chars, index) {
-    return chars[index + 1] === 's' &&
-        chars[index + 2] === 'r' &&
-        chars[index + 3] === 'c';
-}
-
-/**
- * Helper method to check if chars form download attribute
- * @private
- */
-function isDownloadAttribute(chars, index) {
-    return chars[index + 1] === 'd' &&
-        chars[index + 2] === 'o' &&
-        chars[index + 3] === 'w' &&
-        chars[index + 4] === 'n' &&
-        chars[index + 5] === 'l' &&
-        chars[index + 6] === 'o' &&
-        chars[index + 7] === 'a' &&
-        chars[index + 8] === 'd';
-}
-
-/**
- * Helper method to update state on quote character
- * @private
- */
-function updateStateOnQuote(state) {
-    const stateMap = {
-        7: 8,
-        6: 7,
-        17: 18,
-        16: 17
-    };
-    return stateMap[state] || state;
-}
-
-/**
- * Helper method to determine if character should be kept
- * @private
- */
-function shouldKeepChar(state) {
-    return [1, 2, 4, 6, 7, 8, 14, 16, 17, 18].includes(state);
-}
-
-/**
- * Remove tags that only contain &nbsp;
- */
-function removeSingleNbspTags() {
-    const content = AppState.editor.currentText;
-    const chars = content.split('');
-    const result = [];
-    let state = 0;
-    let startIndex = 0;
-    let writeIndex = 0;
-
-    for (let i = 0; i < chars.length; i++) {
-        if (state === 0 && chars[i] === '<' && chars[i + 1] !== '/') {
-            state = 1;
-            startIndex = i;
-        }
-
-        if (state === 2 && chars[i] === '>') {
-            for (let j = 0; j <= i - startIndex; j++) {
-                result[j + startIndex] = '';
-            }
-            chars[i] = '';
-            state = 0;
-        }
-
-        if (state === 1 && chars[i] === '>') {
-            const isNbspTag = chars[i - 2] !== '/' &&
-                chars[i - 1] !== '/' &&
-                chars[i + 1] === '&' &&
-                chars[i + 2] === 'n' &&
-                chars[i + 3] === 'b' &&
-                chars[i + 4] === 's' &&
-                chars[i + 5] === 'p' &&
-                chars[i + 6] === ';' &&
-                chars[i + 7] === '<' &&
-                chars[i + 8] === '/';
-            state = isNbspTag ? 2 : 0;
-        }
-
-        result[writeIndex] = chars[i];
-        writeIndex++;
-    }
-
-    AppState.editor.currentText = result.join('');
-}
-
-/**
- * Remove content between specified tags
- * @param {string} startTag - Opening tag
- * @param {string} endTag - Closing tag
- * @returns {number} Number of occurrences removed
- */
-function removeTagContent(startTag, endTag) {
-    const content = AppState.editor.currentText;
-    const chars = content.split('');
-    const startChars = startTag.split('');
-    const endChars = endTag.split('');
-    const result = [];
-
-    let inTag = 0;
-    let writeIndex = 0;
-    let occurrences = 0;
-    let state = 1;
-
-    for (let i = 0; i < chars.length; i++) {
-        if (chars[i] === '<') {
-            inTag = 1;
-        }
-        if (chars[i] === '>') {
-            inTag = 0;
-        }
-
-        if (inTag === 1) {
-            let isStartTag = true;
-            for (let j = 0; j < startTag.length; j++) {
-                if (startChars[j] !== chars[i + j]) {
-                    isStartTag = false;
-                    break;
-                }
-            }
-
-            if (isStartTag) {
-                occurrences++;
-                state = -999;
-                i += startTag.length;
-                for (let j = 0; j < startTag.length; j++) {
-                    result[writeIndex++] = startChars[j];
-                }
-                continue;
-            }
-        }
-
-        let isEndTag = true;
-        for (let j = 0; j < endTag.length; j++) {
-            if (endChars[j] !== chars[i + j]) {
-                isEndTag = false;
-                break;
-            }
-        }
-
-        if (isEndTag) {
-            state = 0;
-        }
-
-        if (state !== -999 && state > 0) {
-            result[writeIndex++] = chars[i];
-        }
-
-        state++;
-    }
-
-    AppState.editor.currentText = result.join('');
-    return occurrences;
-}
-
-/**
- * Remove style attributes from HTML content
- */
-function removeStyleAttributes() {
-    const content = AppState.editor.currentText;
-    const chars = content.split('');
-    const result = [];
-    let state = 1;
-    let writeIndex = 0;
-
-    for (let i = 0; i < chars.length; i++) {
-        if (this.isStyleAttributeStart(chars, i)) {
-            state = -999;
-            i += 6;
-            continue;
-        }
-
-        if (state === -999 && chars[i + 1] === '"') {
-            state = -2;
-        }
-
-        if (state !== -999 && state !== -2) {
-            result[writeIndex++] = chars[i];
-        }
-
-        state++;
-    }
-
-    AppState.editor.currentText = result.join('');
-}
-
-/**
- * Helper method to check if current position is start of style attribute
- * @private
- */
-function isStyleAttributeStart(chars, index) {
-    return chars[index] === 's' &&
-        chars[index + 1] === 't' &&
-        chars[index + 2] === 'y' &&
-        chars[index + 3] === 'l' &&
-        chars[index + 4] === 'e' &&
-        chars[index + 5] === '=' &&
-        chars[index + 6] === '"';
-}
-
-/**
- * HTML Code Formatting
- */
-const CodeFormatter = {
-    /**
-     * HTML tag definitions
-     */
-    SPECIAL_TAGS: {
-        doctype: ['DOCTYPE', 'doctype'],
-        meta: ['META', 'meta'],
-        link: ['LINK', 'link'],
-        base: ['BASE', 'base'],
-        br: ['BR', 'br'],
-        col: ['COL', 'col'],
-        command: ['command'],
-        embed: ['embed'],
-        hr: ['HR', 'hr'],
-        img: ['IMG', 'img'],
-        input: ['input'],
-        param: ['param'],
-        source: ['source']
-    },
-
-    /**
-     * Format HTML code with proper indentation
-     */
-    formatCode() {
-        const content = AppState.editor.currentText;
-        const chars = content.split('');
-        const result = [];
-        let indentLevel = 0;
-        let writeIndex = 0;
-        let isSpecialTag = false;
-        let isClosingTag = false;
-
-        for (let i = 0; i < chars.length; i++) {
-            if (chars[i] === '<') {
-                isSpecialTag = this.checkForSpecialTag(chars, i);
-                isClosingTag = chars[i + 1] === '/';
-
-                if (!isSpecialTag && !isClosingTag) {
-                    indentLevel++;
-                }
-                if (isClosingTag) {
-                    indentLevel--;
-                }
-            }
-
-            // Add newline and indentation
-            if (chars[i] === '\\n') {
-                result[writeIndex++] = chars[i];
-                const targetIndent = chars[i + 1] === '/' ? indentLevel - 1 : indentLevel;
-                for (let j = 0; j < targetIndent; j++) {
-                    result[writeIndex++] = '\\t';
-                }
-            } else {
-                result[writeIndex++] = chars[i];
-            }
-        }
-
-        // Remove leading newline if exists
-        if (result[0] === '\\n') {
-            result.shift();
-        }
-
-        AppState.editor.currentText = result.join('');
-    },
-
-    /**
-     * Format HTML code with proper indentation (alternative version)
-     */
-    formatCodeAlternative() {
-        const content = AppState.editor.currentText;
-        const chars = content.split('');
-        const result = [];
-        let indentLevel = 0;
-        let writeIndex = 0;
-        let isSpecialTag = false;
-
-        for (let i = 0; i < chars.length; i++) {
-            // Check for special tags that affect indentation
-            if (i >= 5 && chars[i - 5] === '<') {
-                isSpecialTag = this.checkForSpecialTagBackward(chars, i);
-            }
-
-            // Handle indentation
-            if (chars[i] === '<') {
-                if (!isSpecialTag) {
-                    if (chars[i + 1] === '/') {
-                        indentLevel--;
-                    } else {
-                        for (let j = i + 1; chars[j] !== '>' && j < chars.length; j++) {
-                            if (chars[j] === '/' && chars[j + 1] === '>') {
-                                isSpecialTag = true;
-                                break;
-                            }
-                        }
-                        if (!isSpecialTag) {
-                            indentLevel++;
-                        }
+                    // 如果是空元素且不在保留列表中，删除它
+                    if (isEmpty && !preserveTags.has(tagName)) {
+                        child.parentNode.removeChild(child);
                     }
                 }
             }
-
-            // Add newline and indentation
-            if (chars[i] === '\\n') {
-                result[writeIndex++] = chars[i];
-                if (chars[i + 1] === '/') {
-                    for (let j = 0; j < indentLevel - 1; j++) {
-                        result[writeIndex++] = '\\t';
-                    }
-                } else {
-                    for (let j = 0; j < indentLevel; j++) {
-                        result[writeIndex++] = '\\t';
-                    }
-                }
-            } else {
-                result[writeIndex++] = chars[i];
-            }
         }
 
-        AppState.editor.currentText = result.join('');
-    },
+        // 处理整个文档
+        processElement(document.body);
 
-    /**
-     * Check if current position starts a special tag
-     * @private
-     */
-    checkForSpecialTag(chars, startIndex) {
-        const tagText = this.getTagText(chars, startIndex + 1);
-        return Object.values(this.SPECIAL_TAGS).flat().some(tag =>
-            tagText.startsWith(tag)
-        );
-    },
-
-    /**
-     * Check if current position is part of a special tag (backward check)
-     * @private
-     */
-    checkForSpecialTagBackward(chars, currentIndex) {
-        const lookback = 5;
-        const tagStart = currentIndex - lookback;
-        if (tagStart < 0) return false;
-
-        const tagText = this.getTagText(chars, tagStart);
-        return Object.values(this.SPECIAL_TAGS).flat().some(tag =>
-            tagText.startsWith(tag)
-        );
-    },
-
-    /**
-     * Get tag text starting from a position
-     * @private
-     */
-    getTagText(chars, startIndex) {
-        let text = '';
-        let i = startIndex;
-        while (i < chars.length && chars[i] !== '>' && chars[i] !== ' ') {
-            text += chars[i];
-            i++;
-        }
-        return text;
+        return document.body.innerHTML;
+    } catch (error) {
+        console.error('清理空标签错误:', error);
+        return html;
     }
-};
+}
+
 
 /**
- * 清理样式，只保留加粗、斜体、下划线、msolist和marginleft相关的样式
+ * 清理样式，只保留加粗、斜体、下划线、msolist相关的样式，以及msolist元素的marginleft
  * @param {string} html - 要清理的HTML
  * @returns {string} - 清理后的HTML
  */
@@ -884,64 +280,39 @@ function cleanSelectiveStyles(html) {
     if (!html) return '';
 
     try {
-        // 1. 处理h1-h6标签及其内部内容
-        html = html.replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi, (match, level, content) => {
-            // 清理内部的span标签
-            let cleanedContent = content.replace(/<span[^>]*style="([^"]*)"[^>]*>([\s\S]*?)<\/span>/gi, 
-                (spanMatch, styles, spanContent) => {
-                    const styleDeclarations = styles.split(';');
-                    const hasImportantStyle = styleDeclarations.some(declaration => {
-                        declaration = declaration.trim();
-                        return (
-                            /^font-weight:\s*bold/i.test(declaration) ||
-                            /^font-style:\s*italic/i.test(declaration) ||
-                            /^text-decoration:(?:[^;]*)?underline/i.test(declaration)
-                        );
-                    });
+        // 处理所有带有style属性的标签
+        html = html.replace(/style="([^"]*)"[^>]*>/gi, (match, styles) => {
+            const styleDeclarations = styles.split(';');
+            const preserved = [];
+            let hasMsoList = false;
 
-                    // 如果span没有重要样式，只保留内容
-                    return hasImportantStyle ? spanMatch : spanContent;
-                }
+            // 先检查是否有mso-list样式
+            hasMsoList = styleDeclarations.some(declaration =>
+                /^mso-list:/i.test(declaration.trim())
             );
 
-            // 清理其他可能的span标签（没有style属性的）
-            cleanedContent = cleanedContent.replace(/<span[^>]*>([\s\S]*?)<\/span>/gi, '$1');
-
-            // 返回清理后的h标签
-            return `<h${level}>${cleanedContent}</h${level}>`;
-        });
-
-        // 2. 处理其他标签的style属性
-        html = html.replace(/style="([^"]*)"/gi, (match, styles) => {
-            const preserved = [];
-
-            // 分割多个样式声明
-            const styleDeclarations = styles.split(';');
-
+            // 处理每个样式声明
             for (let declaration of styleDeclarations) {
                 declaration = declaration.trim();
                 if (!declaration) continue;
 
                 // 检查是否是要保留的样式
                 if (
-                    /^mso-list:/i.test(declaration) ||
-                    /^margin-left:/i.test(declaration) ||
-                    /^font-weight:\s*bold/i.test(declaration) ||
-                    /^font-style:\s*italic/i.test(declaration) ||
-                    /^text-decoration:(?:[^;]*)?underline/i.test(declaration)
+                    /^mso-list:/i.test(declaration) || // 列表相关
+                    (hasMsoList && /^margin-left:/i.test(declaration)) // 只有mso-list元素的margin-left才保留
                 ) {
                     preserved.push(declaration);
                 }
             }
 
             // 如果有要保留的样式，返回新的style属性
-            return preserved.length > 0 ? `style="${preserved.join('; ')}"` : '';
+            return preserved.length > 0 ? `style="${preserved.join('; ')}">` : '>';
         });
 
         return html;
     } catch (error) {
         console.error('样式清理错误:', error);
-        return html; // 如果处理出错，返回原始内容
+        return html;
     }
 }
 
@@ -1070,6 +441,33 @@ function addListLevelClasses(html) {
     }
 }
 
+
+/**
+ * 判断是否是新的列表组
+ * @param {Element} currentPara - 当前段落
+ * @param {Element} previousPara - 前一个段落
+ * @returns {boolean} - 是否是新的列表组
+ */
+function isNewListGroup(currentPara, previousPara) {
+    if (!previousPara) return true;
+
+    // 获取两个段落之间的非列表内容
+    let node = previousPara.nextSibling;
+    let hasNonListContent = false;
+    while (node && node !== currentPara) {
+        if (node.nodeType === 1 && // 元素节点
+            !node.getAttribute('style')?.includes('mso-list')) {
+            const text = node.textContent.trim();
+            if (text) {
+                hasNonListContent = true;
+                break;
+            }
+        }
+        node = node.nextSibling;
+    }
+
+    return hasNonListContent;
+}
 /**
  * 获取列表类型
  * @param {Element} listItem - 列表项元素
@@ -1110,269 +508,166 @@ function getListType(listItem) {
     return 'ul';
 }
 
+/**
+ * 获取列表类型
+ * @param {Element} listItem - 列表项元素
+ * @returns {string} - 'ol' 或 'ul'
+ */
+function getListType(listItem) {
+    const markerSpan = listItem.querySelector('span[style*="mso-list:Ignore"]');
+    if (!markerSpan) return 'ul';
+
+    const marker = markerSpan.textContent.trim();
+
+    // 检查是否是字母列表（a. b. c. 或 A. B. C.）
+    if (/^[a-zA-Z][\.\)]/.test(marker)) {
+        return 'ol';
+    }
+
+    // 检查是否是数字列表（1. 2. 3.）
+    if (/^[0-9]+\./.test(marker)) {
+        return 'ol';
+    }
+
+    // 检查是否是罗马数字列表（i. ii. iii. 或 I. II. III.）
+    if (/^[ivxlcdmIVXLCDM]+\./.test(marker)) {
+        return 'ol';
+    }
+
+    // 检查是否是中文数字列表
+    if (/^[\u3007\u4e00-\u4e5d\u58f1-\u62fe]+\./.test(marker)) {
+        return 'ol';
+    }
+
+    // 检查是否是项目符号列表（•, ·, §, ○ 等）
+    if (/^[\u2022\u00b7\u00a7\u25CF\u25CB\u25E6\u2023\u2043]/.test(marker)) {
+        return 'ul';
+    }
+
+    // 默认返回无序列表
+    return 'ul';
+}
 function convertMsoListToNestedLists(html) {
     if (!html) return '';
 
     try {
         const dom = new JSDOM(`<!DOCTYPE html><html><body>${html}</body></html>`);
         const document = dom.window.document;
+        const body = document.body;
 
-        // 获取所有带有mso-list的段落
-        const listParagraphs = Array.from(document.querySelectorAll('p[style*="mso-list"]'));
-        if (listParagraphs.length === 0) return html;
+        // 新建一个数组用于收集最终的节点顺序
+        const newNodes = [];
+        let buffer = [];
 
-        // 创建根列表
-        let rootList = null;
-        let currentList = null;
-        let previousLevel = 0;
-        let currentListType = 'ul'; // 默认列表类型
-
-        // 处理每个段落
-        for (let i = 0; i < listParagraphs.length; i++) {
-            const para = listParagraphs[i];
-
-            // 获取列表级别
-            const levelMatch = para.getAttribute('class')?.match(/list-level-(\d+)/);
-            const level = levelMatch ? parseInt(levelMatch[1]) : 1;
-
-            // 确定列表类型
-            const listType = getListType(para);
-
-            // 获取列表标记和内容
-            const markerSpan = para.querySelector('span[style*="mso-list:Ignore"]');
-            if (markerSpan) {
-                markerSpan.parentNode.removeChild(markerSpan);
-            }
-
-            // 获取段落内容
-            const content = para.innerHTML.trim();
-
-            // 创建列表项
-            const li = document.createElement('li');
-            li.innerHTML = content;
-
-            if (level === 1) {
-                // 第一层级，创建新的根列表
-                if (!rootList || previousLevel === 0) {
-                    rootList = document.createElement(listType);
-                    para.parentNode.insertBefore(rootList, para);
-                    currentList = rootList;
-                    currentListType = listType;
+        // 工具函数：处理buffer为嵌套列表
+        function bufferToList(buffer) {
+            if (buffer.length === 0) return null;
+            // 复用原有的嵌套逻辑
+            let rootList = null;
+            let currentList = null;
+            let previousLevel = 0;
+            let currentListType = 'ul';
+            for (let i = 0; i < buffer.length; i++) {
+                const para = buffer[i];
+                const levelMatch = para.getAttribute('class')?.match(/list-level-(\d+)/);
+                const level = levelMatch ? parseInt(levelMatch[1]) : 1;
+                const listType = getListType(para);
+                const markerSpan = para.querySelector('span[style*="mso-list:Ignore"]');
+                if (markerSpan) {
+                    markerSpan.parentNode.removeChild(markerSpan);
                 }
-                currentList = rootList;
-                currentList.appendChild(li);
-            } else {
-                // 处理子层级
-                if (level > previousLevel) {
-                    // 创建新的子列表
-                    const subList = document.createElement(listType);
-                    const lastItem = currentList.lastElementChild;
-                    if (lastItem) {
-                        lastItem.appendChild(subList);
-                        currentList = subList;
+                const content = para.innerHTML.trim();
+                const li = document.createElement('li');
+                li.innerHTML = content;
+                if (level === 1) {
+                    if (!rootList || previousLevel === 0) {
+                        rootList = document.createElement(listType);
+                        currentList = rootList;
                         currentListType = listType;
                     }
-                } else if (level < previousLevel) {
-                    // 返回上层列表
-                    for (let j = 0; j < (previousLevel - level); j++) {
-                        currentList = currentList.parentElement.parentElement;
+                    currentList = rootList;
+                    if (currentList) currentList.appendChild(li);
+                } else {
+                    if (level > previousLevel) {
+                        const subList = document.createElement(listType);
+                        const lastItem = currentList ? currentList.lastElementChild : null;
+                        if (lastItem) {
+                            lastItem.appendChild(subList);
+                            currentList = subList;
+                            currentListType = listType;
+                        } else if (currentList) {
+                            // fallback: 没有lastItem但有currentList
+                            currentList.appendChild(subList);
+                            currentList = subList;
+                            currentListType = listType;
+                        } else {
+                            // fallback: currentList为null，直接新建根列表
+                            currentList = subList;
+                            currentListType = listType;
+                            if (!rootList) rootList = currentList;
+                        }
+                    } else if (level < previousLevel) {
+                        for (let j = 0; j < (previousLevel - level); j++) {
+                            if (currentList && currentList.parentElement && currentList.parentElement.parentElement) {
+                                currentList = currentList.parentElement.parentElement;
+                            }
+                        }
+                    } else if (level === previousLevel && listType !== currentListType) {
+                        const newList = document.createElement(listType);
+                        if (currentList && currentList.parentElement) {
+                            currentList.parentElement.appendChild(newList);
+                            currentList = newList;
+                            currentListType = listType;
+                        } else if (!currentList) {
+                            currentList = newList;
+                            currentListType = listType;
+                            if (!rootList) rootList = currentList;
+                        }
                     }
-                } else if (level === previousLevel && listType !== currentListType) {
-                    // 同级但类型不同，创建新列表
-                    const newList = document.createElement(listType);
-                    currentList.parentElement.appendChild(newList);
-                    currentList = newList;
-                    currentListType = listType;
+                    if (currentList) {
+                        currentList.appendChild(li);
+                    }
                 }
-                currentList.appendChild(li);
+                previousLevel = level;
             }
-
-            // 更新前一个层级
-            previousLevel = level;
-
-            // 移除原始段落
-            para.parentNode.removeChild(para);
+            return rootList;
         }
 
-        // 返回处理后的HTML
-        return document.body.innerHTML;
+        // 顺序遍历body的所有子节点
+        let node = body.firstChild;
+        while (node) {
+            const nextNode = node.nextSibling; // 先保存下一个节点
+            if (node.nodeType === 1 && node.tagName.toLowerCase() === 'p' && node.getAttribute('style') && node.getAttribute('style').includes('mso-list')) {
+                buffer.push(node);
+            } else {
+                if (buffer.length) {
+                    const list = bufferToList(buffer);
+                    if (list) newNodes.push(list);
+                    buffer = [];
+                }
+                newNodes.push(node);
+            }
+            node = nextNode;
+        }
+        // 处理结尾的buffer
+        if (buffer.length) {
+            const list = bufferToList(buffer);
+            if (list) newNodes.push(list);
+        }
+
+        // 清空body，按顺序插入新节点
+        body.innerHTML = '';
+        for (const n of newNodes) {
+            body.appendChild(n);
+        }
+
+        return body.innerHTML;
     } catch (error) {
         console.error('转换列表错误:', error);
         return html;
     }
 }
 
-/**
- * 清理多余的span标签
- * @param {string} html - 要处理的HTML
- * @returns {string} - 处理后的HTML
- */
-function cleanRedundantSpans(html) {
-    if (!html) return '';
-
-    try {
-        const dom = new JSDOM(`<!DOCTYPE html><html><body>${html}</body></html>`);
-        const document = dom.window.document;
-
-        /**
-         * 检查span是否只包含下划线样式
-         * @param {Element} span - span元素
-         * @returns {boolean} - 是否只包含下划线样式
-         */
-        function hasOnlyUnderlineStyle(span) {
-            const style = span.getAttribute('style');
-            if (!style) return false;
-
-            const styles = style.split(';').map(s => s.trim()).filter(s => s);
-            return styles.length === 1 && /^text-decoration:(?:[^;]*)?underline/.test(styles[0]);
-        }
-
-        /**
-         * 检查span是否只包含加粗样式
-         * @param {Element} span - span元素
-         * @returns {boolean} - 是否只包含加粗样式
-         */
-        function hasOnlyBoldStyle(span) {
-            const style = span.getAttribute('style');
-            if (!style) return false;
-
-            const styles = style.split(';').map(s => s.trim()).filter(s => s);
-            return styles.length === 1 && /^font-weight:\s*bold/.test(styles[0]);
-        }
-
-        /**
-         * 处理元素中的span标签
-         * @param {Element} element - 要处理的元素
-         */
-        function processSpans(element) {
-            // 如果元素没有子节点，直接返回
-            if (!element.hasChildNodes()) {
-                return;
-            }
-
-            // 处理所有子节点
-            const childNodes = Array.from(element.childNodes);
-            let newContent = '';
-
-            for (let node of childNodes) {
-                if (node.nodeType === 3) { // 文本节点
-                    newContent += node.textContent;
-                } else if (node.nodeType === 1) { // 元素节点
-                    if (node.tagName === 'SPAN') {
-                        const parentTag = node.parentElement.tagName;
-                        const onlyUnderline = hasOnlyUnderlineStyle(node);
-                        const onlyBold = hasOnlyBoldStyle(node);
-
-                        if ((parentTag === 'U' && onlyUnderline) ||
-                            ((parentTag === 'B' || parentTag === 'STRONG') && onlyBold)) {
-                            // 如果span在u标签内且只有下划线样式，或在b/strong标签内且只有加粗样式
-                            // 只保留内容
-                            newContent += node.innerHTML;
-                        } else if (node.querySelector('*')) {
-                            // 如果span内有其他标签，递归处理后保留
-                            processSpans(node);
-                            newContent += node.outerHTML;
-                        } else if (!node.textContent.trim()) {
-                            // 如果是空的span，不添加任何内容
-                            continue;
-                        } else {
-                            // 其他情况保留span的内容
-                            newContent += node.textContent;
-                        }
-                    } else {
-                        // 对于非span标签，递归处理其内容
-                        processSpans(node);
-                        newContent += node.outerHTML;
-                    }
-                }
-            }
-
-            element.innerHTML = newContent;
-        }
-
-        /**
-         * 清理空的b标签
-         * @param {Element} element - 要处理的元素
-         */
-        function cleanEmptyBTags(element) {
-            const bTags = element.getElementsByTagName('b');
-            const strongTags = element.getElementsByTagName('strong');
-
-            // 从后向前遍历，这样在删除节点时不会影响到索引
-            for (let i = bTags.length - 1; i >= 0; i--) {
-                const tag = bTags[i];
-                if (!tag.textContent.trim()) {
-                    tag.parentNode.removeChild(tag);
-                }
-            }
-
-            for (let i = strongTags.length - 1; i >= 0; i--) {
-                const tag = strongTags[i];
-                if (!tag.textContent.trim()) {
-                    tag.parentNode.removeChild(tag);
-                }
-            }
-        }
-
-        // 处理整个文档
-        processSpans(document.body);
-        cleanEmptyBTags(document.body);
-
-        return document.body.innerHTML;
-    } catch (error) {
-        console.error('清理list内冗余span标签错误:', error);
-        return html;
-    }
-}
-
-/**
- * 清理标题标签的margin-left样式
- * @param {string} html - 要处理的HTML
- * @returns {string} - 处理后的HTML
- */
-function cleanHeadingMargins(html) {
-    if (!html) return '';
-
-    try {
-        const dom = new JSDOM(`<!DOCTYPE html><html><body>${html}</body></html>`);
-        const document = dom.window.document;
-
-        // 处理所有h1-h6标签
-        for (let i = 1; i <= 6; i++) {
-            const headings = document.getElementsByTagName(`h${i}`);
-            for (let heading of headings) {
-                // 清理margin-left样式
-                const style = heading.getAttribute('style');
-                if (style) {
-                    // 移除margin-left样式，保留其他样式
-                    const styles = style.split(';')
-                        .map(s => s.trim())
-                        .filter(s => s && !s.toLowerCase().startsWith('margin-left:'));
-
-                    if (styles.length > 0) {
-                        heading.setAttribute('style', styles.join('; '));
-                    } else {
-                        heading.removeAttribute('style');
-                    }
-                }
-
-                // 清理标题内的b和strong标签
-                const boldElements = heading.querySelectorAll('b, strong');
-                boldElements.forEach(boldElement => {
-                    // 创建文本节点替换b/strong标签
-                    const textContent = boldElement.textContent;
-                    const textNode = document.createTextNode(textContent);
-                    boldElement.parentNode.replaceChild(textNode, boldElement);
-                });
-            }
-        }
-
-        return document.body.innerHTML;
-    } catch (error) {
-        console.error('清理标题margin-left错误:', error);
-        return html;
-    }
-}
 
 /**
  * 清理所有标签的align属性
@@ -1383,91 +678,45 @@ function cleanAlignAttributes(html) {
     if (!html) return '';
 
     try {
-        const dom = new JSDOM(`<!DOCTYPE html><html><body>${html}</body></html>`);
+        const dom = new JSDOM(`<!DOCTYPE html><html><body>${html}</body></html>`, {
+            // 设置选项以保持原始HTML格式
+            includeNodeLocations: true
+        });
         const document = dom.window.document;
 
-        // 获取所有元素
-        const allElements = document.getElementsByTagName('*');
-        for (let element of allElements) {
-            // 移除align属性
-            if (element.hasAttribute('align')) {
-                element.removeAttribute('align');
-            }
+        // 获取所有带有align属性的元素
+        const elementsWithAlign = document.querySelectorAll('[align]');
+        if (elementsWithAlign.length === 0) {
+            return html; // 如果没有align属性，直接返回原始HTML
         }
 
-        return document.body.innerHTML;
-    } catch (error) {
-        console.error('清理align属性错误:', error);
-        return html;
-    }
-}
-
-/**
- * 结构化内容，使用section包围标题及其内容
- * @param {string} html - 要处理的HTML
- * @returns {string} - 处理后的HTML
- */
-function structureContent(html) {
-    if (!html) return '';
-
-    try {
-        const dom = new JSDOM(`<!DOCTYPE html><html><body>${html}</body></html>`);
-        const document = dom.window.document;
-
-        // 获取所有标题元素
-        const headings = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6'));
-        if (headings.length === 0) {
-            return html;
-        }
-
-        // 处理每个标题及其内容
-        const processedNodes = [];
-        for (let i = 0; i < headings.length; i++) {
-            const currentHeading = headings[i];
-            const nextHeading = headings[i + 1];
-
-            // 创建section
-            const section = document.createElement('section');
-
-            // 创建title并保持HTML结构
-            const titleContent = currentHeading.innerHTML;
-            section.innerHTML = `<title>${titleContent}</title>`;
-
-            // 收集当前标题到下一个标题之间的所有内容
-            let currentNode = currentHeading.nextSibling;
-            let hasContent = false;
-
-            while (currentNode && (!nextHeading || !currentNode.isSameNode(nextHeading))) {
-                if (currentNode.nodeType === 1) { // 元素节点
-                    const clonedNode = currentNode.cloneNode(true);
-                    if (clonedNode.textContent.trim()) {
-                        section.appendChild(clonedNode);
-                        hasContent = true;
-                    }
-                }
-                currentNode = currentNode.nextSibling;
-            }
-
-            // 将原始标题移除
-            currentHeading.parentNode.removeChild(currentHeading);
-
-            // 只有当section包含标题文本或其他内容时才添加
-            if (titleContent || hasContent) {
-                processedNodes.push(section);
-            }
-        }
-
-        // 清空body
-        document.body.innerHTML = '';
-
-        // 添加所有处理后的节点
-        processedNodes.forEach(node => {
-            document.body.appendChild(node);
+        // 记录所有需要处理的元素的原始状态
+        const modifications = Array.from(elementsWithAlign).map(element => {
+            const tempDiv = document.createElement('div');
+            tempDiv.appendChild(element.cloneNode(true));
+            return {
+                original: tempDiv.innerHTML,
+                element: element
+            };
         });
 
-        return document.body.innerHTML.trim();
+        // 移除align属性
+        elementsWithAlign.forEach(element => {
+            element.removeAttribute('align');
+        });
+
+        // 使用字符串替换而不是整个DOM序列化
+        let result = html;
+        for (const mod of modifications) {
+            const tempDiv = document.createElement('div');
+            tempDiv.appendChild(mod.element.cloneNode(true));
+            const newContent = tempDiv.innerHTML;
+            result = result.replace(mod.original, newContent);
+        }
+
+        return result;
     } catch (error) {
-        console.error('内容结构化错误:', error);
+        console.error('清理align属性错误:', error);
         return html;
     }
 }
@@ -1477,155 +726,197 @@ function structureContent(html) {
  * @param {string} html - 要处理的HTML
  * @returns {string} - 处理后的HTML
  */
-function cleanTables(html) {
+function processTables(html) {
     if (!html) return '';
 
     try {
-        // 处理表格标签和属性
-        return html.replace(/<table[^>]*>[\s\S]*?<\/table>/gi, (tableMatch) => {
-            // 使用JSDOM解析表格结构
-            const dom = new JSDOM(`<!DOCTYPE html><html><body>${tableMatch}</body></html>`);
-            const document = dom.window.document;
-            const table = document.querySelector('table');
+        // 1. 匹配所有<table ...>...</table>，支持跨行
+        const tableRegex = /<table[\s\S]*?<\/table>/gi;
+        let tableIndex = 0;
+        const tableMap = new Map(); // id => entryTableString
+        let match;
+        let htmlWithPlaceholders = html;
 
-            if (!table) return tableMatch;
-
-            // 分析表格结构
-            const tbodies = table.getElementsByTagName('tbody');
-            if (tbodies.length === 0) return tableMatch;
-
-            // 获取第一个tbody的结构信息
-            const tbody = tbodies[0];
-            const rows = tbody.getElementsByTagName('tr');
-            if (rows.length === 0) return tableMatch;
-
-            // 计算列数
-            const firstRow = rows[0];
-            const colCount = firstRow.getElementsByTagName('td').length ||
-                firstRow.getElementsByTagName('th').length;
-
-            if (colCount === 0) return tableMatch;
-
-            // 使用字符串方式构建新的表格
-            let newTable = '<table frame="all" rowsep="1" colsep="1">';
-
-            // 构建tgroup
-            newTable += `<tgroup cols="${colCount}">`;
-
-            // 添加colspec元素
-            for (let i = 1; i <= colCount; i++) {
-                newTable += `<colspec colnum="${i}" colname="col${i}"/>`;
-            }
-
-            // 构建tbody
-            newTable += '<tbody>';
-
-            // 处理每一行
-            for (let row of rows) {
-                newTable += '<row>';
-                const cells = row.getElementsByTagName('td');
-                const headerCells = row.getElementsByTagName('th');
-
-                // 处理单元格
-                if (cells.length > 0) {
-                    // 确保每行都有正确数量的单元格
-                    for (let i = 0; i < colCount; i++) {
-                        const cell = cells[i];
-                        if (cell) {
-                            // 检查是否是只包含空p标签的单元格
-                            const pTags = cell.getElementsByTagName('p');
-                            const hasOnlyEmptyPTags = pTags.length > 0 &&
-                                Array.from(pTags).every(p => !p.textContent.trim() && p.children.length === 0);
-
-                            if (hasOnlyEmptyPTags) {
-                                // 如果只包含空p标签，使用<entry></entry>
-                                newTable += '<entry></entry>';
-                                continue;
-                            }
-
-                            // 清理单元格内容，移除不必要的包裹标签
-                            let cellContent = '';
-
-                            if (pTags.length > 0) {
-                                // 如果有p标签，提取其文本内容
-                                for (let p of pTags) {
-                                    // 如果p标签直接包含文本或只包含简单的格式化标签(b, i, u等)
-                                    if (p.children.length === 0 ||
-                                        Array.from(p.children).every(child =>
-                                            ['B', 'I', 'U', 'STRONG', 'EM'].includes(child.tagName))) {
-                                        cellContent += p.innerHTML.trim();
-                                    } else {
-                                        // 如果p标签包含其他复杂结构，保留原始HTML
-                                        cellContent += p.outerHTML;
-                                    }
-                                }
-                            } else {
-                                // 如果没有p标签，使用原始内容
-                                cellContent = cell.innerHTML;
-                            }
-
-                            // 移除可能的连续空格和换行，但保留空内容
-                            cellContent = cellContent.replace(/\s+/g, ' ').trim();
-
-                            // 包装成entry标签
-                            newTable += `<entry>${cellContent}</entry>`;
-                        } else {
-                            // 如果这个位置没有单元格，添加空的entry
-                            newTable += '<entry></entry>';
-                        }
-                    }
-                } else if (headerCells.length > 0) {
-                    // 对表头行做同样的处理
-                    for (let i = 0; i < colCount; i++) {
-                        const cell = headerCells[i];
-                        if (cell) {
-                            // 检查是否是只包含空p标签的单元格
-                            const pTags = cell.getElementsByTagName('p');
-                            const hasOnlyEmptyPTags = pTags.length > 0 &&
-                                Array.from(pTags).every(p => !p.textContent.trim() && p.children.length === 0);
-
-                            if (hasOnlyEmptyPTags) {
-                                // 如果只包含空p标签，使用<entry></entry>
-                                newTable += '<entry></entry>';
-                                continue;
-                            }
-
-                            let cellContent = '';
-                            if (pTags.length > 0) {
-                                for (let p of pTags) {
-                                    if (p.children.length === 0 ||
-                                        Array.from(p.children).every(child =>
-                                            ['B', 'I', 'U', 'STRONG', 'EM'].includes(child.tagName))) {
-                                        cellContent += p.innerHTML.trim();
-                                    } else {
-                                        cellContent += p.outerHTML;
-                                    }
-                                }
-                            } else {
-                                cellContent = cell.innerHTML;
-                            }
-
-                            cellContent = cellContent.replace(/\s+/g, ' ').trim();
-                            newTable += `<entry>${cellContent}</entry>`;
-                        } else {
-                            // 如果这个位置没有单元格，添加空的entry
-                            newTable += '<entry></entry>';
-                        }
-                    }
+        // 2. 遍历所有表格，分析并替换为占位符
+        while ((match = tableRegex.exec(html)) !== null) {
+            const tableHtml = match[0];
+            tableIndex++;
+            const tableId = `__TABLE_PLACEHOLDER_${tableIndex}__`;
+            // 用jsdom分析表格结构，生成entry格式
+            let entryTableString = '';
+            try {
+                const dom = new JSDOM(`<!DOCTYPE html><html><body>${tableHtml}</body></html>`);
+                const document = dom.window.document;
+                const table = document.querySelector('table');
+                if (!table) {
+                    entryTableString = tableHtml; // fallback
                 } else {
-                    // 如果这一行既没有td也没有th，添加空的entry填充
-                    for (let i = 0; i < colCount; i++) {
-                        newTable += '<entry></entry>';
+                    // 计算列数
+                    const colCount = (() => {
+                        const firstRow = table.querySelector('tr');
+                        if (!firstRow) return 0;
+                        // 统计所有colspan后的最大列数
+                        let maxCols = 0;
+                        let rows = table.querySelectorAll('tr');
+                        for (let row of rows) {
+                            let count = 0;
+                            for (let cell of row.querySelectorAll('td,th')) {
+                                count += parseInt(cell.getAttribute('colspan') || '1', 10);
+                            }
+                            if (count > maxCols) maxCols = count;
+                        }
+                        return maxCols;
+                    })();
+                    if (colCount === 0) {
+                        entryTableString = tableHtml;
+                    } else {
+                        let newTable = '<table frame="all" rowsep="1" colsep="1">';
+                        newTable += `<tgroup cols="${colCount}">`;
+                        for (let i = 1; i <= colCount; i++) {
+                            newTable += `<colspec colnum="${i}" colname="col${i}"/>`;
+                        }
+                        // 处理thead和tbody
+                        const thead = table.querySelector('thead');
+                        const tbody = table.querySelector('tbody');
+                        let headRows = [];
+                        let bodyRows = [];
+                        if (thead) {
+                            headRows = Array.from(thead.querySelectorAll('tr'));
+                            if (tbody) {
+                                bodyRows = Array.from(tbody.querySelectorAll('tr'));
+                            } else {
+                                bodyRows = Array.from(table.querySelectorAll('tr')).filter(tr => !thead.contains(tr));
+                            }
+                        } else {
+                            bodyRows = Array.from(table.querySelectorAll('tr'));
+                        }
+                        // 生成thead
+                        if (headRows.length) {
+                            newTable += '<thead>';
+                            newTable += generateCalsRows(headRows, colCount);
+                            newTable += '</thead>';
+                        }
+                        // 生成tbody
+                        if (bodyRows.length) {
+                            newTable += '<tbody>';
+                            newTable += generateCalsRows(bodyRows, colCount);
+                            newTable += '</tbody>';
+                        }
+                        newTable += '</tgroup></table>';
+                        entryTableString = newTable;
                     }
                 }
-                newTable += '</row>';
+            } catch (err) {
+                entryTableString = tableHtml;
             }
+            // 记录映射
+            tableMap.set(tableId, entryTableString);
+            // 用占位符替换原始表格
+            htmlWithPlaceholders = htmlWithPlaceholders.replace(tableHtml, `<table id="${tableId}"></table>`);
+        }
 
-            newTable += '</tbody></tgroup></table>';
-            return newTable;
-        });
+        // 3. 替换所有占位符为entry格式表格串
+        let finalHtml = htmlWithPlaceholders;
+        for (const [tableId, entryTableString] of tableMap.entries()) {
+            finalHtml = finalHtml.replace(`<table id="${tableId}"></table>`, entryTableString);
+        }
+        return finalHtml;
     } catch (error) {
-        console.error('清理表格错误:', error);
+        console.error('表格处理错误:', error);
+        return html;
+    }
+}
+
+// 生成CALS行，支持rowspan/colspan合并
+function generateCalsRows(rows, colCount) {
+    // 占位矩阵，记录哪些格子被rowspan/colspan占用
+    const occupied = [];
+    let result = '';
+    let colNames = Array.from({ length: colCount }, (_, i) => `col${i + 1}`);
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+        const row = rows[rowIndex];
+        result += '<row>';
+        let cells = Array.from(row.querySelectorAll('td,th'));
+        let col = 0;
+        for (let cellIndex = 0; cellIndex < cells.length; cellIndex++) {
+            // 跳过被占用的格子
+            while (occupied[rowIndex]?.[col]) col++;
+            const cell = cells[cellIndex];
+            const rowspan = parseInt(cell.getAttribute('rowspan') || '1', 10);
+            const colspan = parseInt(cell.getAttribute('colspan') || '1', 10);
+            let entryAttrs = '';
+            if (rowspan > 1) entryAttrs += ` morerows="${rowspan - 1}"`;
+            if (colspan > 1) entryAttrs += ` namest="${colNames[col]}" nameend="${colNames[col + colspan - 1]}"`;
+            // 标记被占用的格子
+            for (let r = 0; r < rowspan; r++) {
+                for (let c = 0; c < colspan; c++) {
+                    if (!occupied[rowIndex + r]) occupied[rowIndex + r] = [];
+                    occupied[rowIndex + r][col + c] = true;
+                }
+            }
+            // 处理内容
+            const pTags = cell.getElementsByTagName('p');
+            const hasOnlyEmptyPTags = pTags.length > 0 &&
+                Array.from(pTags).every(p => !p.textContent.trim() && p.children.length === 0);
+            let cellContent = '';
+            if (hasOnlyEmptyPTags) {
+                // 空内容
+            } else if (pTags.length > 0) {
+                for (let p of pTags) {
+                    if (p.children.length === 0 ||
+                        Array.from(p.children).every(child =>
+                            ['B', 'I', 'U', 'STRONG', 'EM'].includes(child.tagName))) {
+                        cellContent += p.innerHTML.trim();
+                    } else {
+                        cellContent += p.outerHTML;
+                    }
+                }
+            } else {
+                cellContent = cell.innerHTML;
+            }
+            cellContent = cellContent.replace(/\s+/g, ' ').trim();
+            result += `<entry${entryAttrs}>${cellContent}</entry>`;
+            col += colspan;
+        }
+        // 补齐空格
+        while (col < colCount) {
+            result += '<entry></entry>';
+            col++;
+        }
+        result += '</row>';
+    }
+    return result;
+}
+
+/**
+ * 处理标题标签，将h1转换为title标签，h2-h6转换为b标签
+ * @param {string} html - 要处理的HTML
+ * @returns {string} - 处理后的HTML
+ */
+function cleanHeadingTags(html) {
+    if (!html) return '';
+
+    try {
+        // 移除所有带有mso-list:Ignore的span及其内容
+        html = html.replace(/<span[^>]*style="[^"]*mso-list:Ignore[^"]*"[^>]*>[\s\S]*?<\/span>/gi, '');
+
+        // 将h2-h6转换为b
+        html = html
+            .replace(/<h[2-6][^>]*>([\s\S]*?)<\/h[2-6]>/gi, '<b>$1</b>');
+
+        // 检查是否有<h1>
+        const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+        if (h1Match) {
+            // 提取h1内容
+            const h1Content = h1Match[1];
+            // 替换第一个h1为<title>
+            html = html.replace(/<h1[^>]*>[\s\S]*?<\/h1>/i, `<title>${h1Content}</title>`);
+            // 用<section>包裹整体内容
+            html = `<section>${html}</section>`;
+        }
+        return html;
+    } catch (error) {
+        console.error('处理标题标签错误:', error);
         return html;
     }
 }
@@ -1633,17 +924,7 @@ function cleanTables(html) {
 module.exports = {
     cleanHtml,
     formatHtml,
-    cleanClassAndIdAttributes,
-    cleanEmptyTags,
-    cleanSelectiveStyles,
-    getListLevel,
-    analyzeListItem,
-    addListLevelClasses,
-    convertMsoListToNestedLists,
-    cleanRedundantSpans,
-    cleanHeadingMargins,
-    cleanAlignAttributes,
-    structureContent,
-    cleanTables
+
 };
+
 

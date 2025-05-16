@@ -1,6 +1,6 @@
 const fs = require('fs').promises;
 const path = require('path');
-const { cleanHtml, formatHtml, cleanEmptyTags } = require('../utils/htmlUtils');
+const { cleanHtml, formatHtml, } = require('../utils/htmlUtils');
 
 // 定义基础路径
 const BASE_DIR = path.join(__dirname, '../..');
@@ -16,21 +16,52 @@ class TransformService {
             TransformService.instance = this;
             // 绑定方法到实例
             this.transformContent = this.transformContent.bind(this);
-            this.handleHtmlContent = this.handleHtmlContent.bind(this);
-            // 确保debug目录存在
-            this.ensureDebugDir();
+            // 初始化debug目录
+            this.initializeDebugDir();
         }
         return TransformService.instance;
     }
 
     /**
-     * 确保debug目录存在
+     * 初始化debug目录
      */
-    async ensureDebugDir() {
+    async initializeDebugDir() {
         try {
-            await fs.access(DEBUG_DIR);
+            // 检查debug目录是否存在
+            try {
+                await fs.access(DEBUG_DIR);
+            } catch (error) {
+                // 如果目录不存在，创建它
+                await fs.mkdir(DEBUG_DIR, { recursive: true });
+                return;
+            }
+
+            // 如果目录存在，清理旧文件
+            const files = await fs.readdir(DEBUG_DIR);
+            if (files.length > 0) {
+                // 获取所有debug文件的详细信息
+                const fileStats = await Promise.all(
+                    files.map(async (file) => {
+                        const filePath = path.join(DEBUG_DIR, file);
+                        const stats = await fs.stat(filePath);
+                        return {
+                            name: file,
+                            path: filePath,
+                            mtime: stats.mtime
+                        };
+                    })
+                );
+
+                // 按修改时间排序，保留最新的文件
+                fileStats.sort((a, b) => b.mtime - a.mtime);
+
+                // 删除除最新文件外的所有文件
+                for (let i = 1; i < fileStats.length; i++) {
+                    await fs.unlink(fileStats[i].path);
+                }
+            }
         } catch (error) {
-            await fs.mkdir(DEBUG_DIR, { recursive: true });
+            console.error('初始化debug目录失败:', error);
         }
     }
 
@@ -40,18 +71,23 @@ class TransformService {
      */
     async generateDebugHtml(content) {
         try {
+            // 先清理旧文件
+            await this.initializeDebugDir();
+
             const now = new Date();
             const fileName = `debug_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}.html`;
-            const debugHtml = `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Debug HTML</title>
-</head>
-<body>
-${content}
-</body>
-</html>`;
+            const debugHtml = `
+                <!DOCTYPE html>
+                <html>
+                    <head>
+                        <meta charset="UTF-8">
+                        <title>Debug HTML</title>
+                    </head>
+                    <body>
+                        ${content}
+                    </body>
+                </html>
+            `;
             const filePath = path.join(DEBUG_DIR, fileName);
             await fs.writeFile(filePath, debugHtml, 'utf8');
             return filePath;
@@ -79,22 +115,22 @@ ${content}
     async transformContent(content) {
         const processingSteps = [];
         try {
-            // 1. 先清理HTML
+            // 1. 清理空标签（使用JSDOM处理标准HTML结构）
+            // 2. 进行HTML清理和DITA转换
+            processingSteps.push('2. HTML内容清理和DITA转换完成');
             const cleanedContent = cleanHtml(content);
-            processingSteps.push('1. HTML内容清理完成');
 
-            // 2. 清理空标签
-            const noEmptyTagsContent = cleanEmptyTags(cleanedContent);
-            processingSteps.push('2. 空标签清理完成');
+            processingSteps.push('1. 空标签清理完成');
+            // const noEmptyTagsContent = cleanEmptyTags(cleanedContent);
 
             // 生成调试用的HTML文件
-            const debugFilePath = await this.generateDebugHtml(noEmptyTagsContent);
+            const debugFilePath = await this.generateDebugHtml(cleanedContent);
             if (debugFilePath) {
                 processingSteps.push(`调试文件已生成: ${debugFilePath}`);
             }
 
             // 3. 格式化处理后的HTML
-            const formattedContent = formatHtml(noEmptyTagsContent);
+            const formattedContent = formatHtml(cleanedContent);
             processingSteps.push('3. HTML格式化完成');
 
             return {
@@ -111,15 +147,6 @@ ${content}
                 steps: processingSteps
             };
         }
-    }
-
-    /**
-     * 处理HTML内容
-     * @param {string} content - HTML内容
-     * @returns {Promise<string>} 处理后的HTML内容
-     */
-    async handleHtmlContent(content) {
-        return cleanHtml(content);
     }
 }
 
