@@ -167,38 +167,6 @@ function formatHtml(html) {
     }
 }
 
-/**
- * 检查是否是编号列表
- * @param {string} text - 要检查的文本
- * @returns {boolean} 是否是编号列表
- */
-function isNumericList(text) {
-    // 移除开头的空格
-    text = text.replace(/^[\u00a0 ]+/, '');
-
-    // 定义各种列表标记的正则表达式
-    const patterns = [
-        /^[IVXLMCD]{1,2}\.[ \u00a0]/,      // 罗马数字大写
-        /^[ivxlmcd]{1,2}\.[ \u00a0]/,      // 罗马数字小写
-        /^[a-z]{1,2}[\.\)][ \u00a0]/,      // 小写字母
-        /^[A-Z]{1,2}[\.\)][ \u00a0]/,      // 大写字母
-        /^[0-9]+\.[ \u00a0]/,              // 数字
-        /^[\u3007\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d]+\.[ \u00a0]/, // 中文数字（简体）
-        /^[\u58f1\u5f10\u53c2\u56db\u4f0d\u516d\u4e03\u516b\u4e5d\u62fe]+\.[ \u00a0]/  // 中文数字（繁体）
-    ];
-
-    // 检查是否匹配任一模式
-    return patterns.some(pattern => pattern.test(text));
-}
-
-/**
- * 检查是否是项目符号列表
- * @param {string} text - 要检查的文本
- * @returns {boolean} 是否是项目符号列表
- */
-function isBulletList(text) {
-    return /^[\s\u00a0]*[\u2022\u00b7\u00a7\u25CF]\s*/.test(text);
-}
 
 /**
  * 清理 class、id、align、valign、data-* 等属性
@@ -316,67 +284,6 @@ function cleanSelectiveStyles(html) {
     }
 }
 
-/**
- * 根据margin-left值判断列表层级
- * @param {string} marginLeft - margin-left值，例如 "22.6500pt"
- * @returns {number} - 返回层级，从1开始
- */
-function getListLevel(marginLeft) {
-    if (!marginLeft) return 1;
-
-    // 提取数值部分
-    const match = marginLeft.match(/(\d+(\.\d+)?)/);
-    if (!match) return 1;
-
-    const value = parseFloat(match[1]);
-
-    // 根据margin-left值判断层级
-    if (value <= 22.65) return 1;
-    if (value <= 45.35) return 2;
-    if (value <= 68) return 3;    // 预留第三层级
-    return Math.ceil(value / 22.65); // 其他情况按比例计算
-}
-
-/**
- * 判断HTML元素是否是列表项
- * @param {string} html - HTML元素
- * @returns {Object} - 返回列表信息，包括是否是列表项、层级等
- */
-function analyzeListItem(html) {
-    try {
-        // 提取style属性
-        const styleMatch = html.match(/style="([^"]*)"/);
-        if (!styleMatch) return { isList: false };
-
-        const style = styleMatch[1];
-
-        // 检查是否包含mso-list
-        const hasMsoList = style.includes('mso-list:');
-        if (!hasMsoList) return { isList: false };
-
-        // 提取margin-left值
-        const marginMatch = style.match(/margin-left:\s*([^;]+)/);
-        const marginLeft = marginMatch ? marginMatch[1].trim() : '';
-
-        // 获取层级
-        const level = getListLevel(marginLeft);
-
-        // 提取列表标记文本（如 "a.", "i.", "1." 等）
-        const markerMatch = html.match(/<span[^>]*style="[^"]*mso-list:Ignore[^"]*"[^>]*>([\s\S]*?)<\/span>/);
-        const marker = markerMatch ? markerMatch[1].trim() : '';
-
-        return {
-            isList: true,
-            level,
-            marginLeft,
-            marker,
-            style
-        };
-    } catch (error) {
-        console.error('分析列表项错误:', error);
-        return { isList: false };
-    }
-}
 
 /**
  * 动态分析列表层级并添加对应的class
@@ -441,72 +348,6 @@ function addListLevelClasses(html) {
     }
 }
 
-
-/**
- * 判断是否是新的列表组
- * @param {Element} currentPara - 当前段落
- * @param {Element} previousPara - 前一个段落
- * @returns {boolean} - 是否是新的列表组
- */
-function isNewListGroup(currentPara, previousPara) {
-    if (!previousPara) return true;
-
-    // 获取两个段落之间的非列表内容
-    let node = previousPara.nextSibling;
-    let hasNonListContent = false;
-    while (node && node !== currentPara) {
-        if (node.nodeType === 1 && // 元素节点
-            !node.getAttribute('style')?.includes('mso-list')) {
-            const text = node.textContent.trim();
-            if (text) {
-                hasNonListContent = true;
-                break;
-            }
-        }
-        node = node.nextSibling;
-    }
-
-    return hasNonListContent;
-}
-/**
- * 获取列表类型
- * @param {Element} listItem - 列表项元素
- * @returns {string} - 'ol' 或 'ul'
- */
-function getListType(listItem) {
-    const markerSpan = listItem.querySelector('span[style*="mso-list:Ignore"]');
-    if (!markerSpan) return 'ul';
-
-    const marker = markerSpan.textContent.trim();
-
-    // 检查是否是字母列表（a. b. c. 或 A. B. C.）
-    if (/^[a-zA-Z][\.\)]/.test(marker)) {
-        return 'ol';
-    }
-
-    // 检查是否是数字列表（1. 2. 3.）
-    if (/^[0-9]+\./.test(marker)) {
-        return 'ol';
-    }
-
-    // 检查是否是罗马数字列表（i. ii. iii. 或 I. II. III.）
-    if (/^[ivxlcdmIVXLCDM]+\./.test(marker)) {
-        return 'ol';
-    }
-
-    // 检查是否是中文数字列表
-    if (/^[\u3007\u4e00-\u4e5d\u58f1-\u62fe]+\./.test(marker)) {
-        return 'ol';
-    }
-
-    // 检查是否是项目符号列表（•, ·, §, ○ 等）
-    if (/^[\u2022\u00b7\u00a7\u25CF\u25CB\u25E6\u2023\u2043]/.test(marker)) {
-        return 'ul';
-    }
-
-    // 默认返回无序列表
-    return 'ul';
-}
 
 /**
  * 获取列表类型
@@ -924,7 +765,6 @@ function cleanHeadingTags(html) {
 module.exports = {
     cleanHtml,
     formatHtml,
-
 };
 
 
