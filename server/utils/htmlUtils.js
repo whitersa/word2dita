@@ -1,4 +1,5 @@
 const { JSDOM } = require('jsdom');
+// const createDOMPurify = require('dompurify');
 
 /**
  * 清理和规范化 HTML 内容
@@ -7,6 +8,21 @@ const { JSDOM } = require('jsdom');
  */
 function cleanHtml(html) {
     if (!html) return '';
+
+
+    try {
+        require('fs').writeFileSync('debug-stage0.html', html);
+    } catch (err) {
+        console.error('Debug file write error:', err);
+    }
+
+    // const DOMPurify = createDOMPurify(new JSDOM().window);
+    // html = DOMPurify.sanitize(html);
+    // try {
+    //     require('fs').writeFileSync('debug-stage1.html', html);
+    // } catch (err) {
+    //     console.error('Debug file write error:', err);
+    // }
 
     try {
         // 1. 基础清理
@@ -41,7 +57,11 @@ function cleanHtml(html) {
         // 6. 清理align属性
         html = cleanAlignAttributes(html);
         html = html.replace(/<font[^>]*>([\s\S]*?)<\/font>/gi, '$1')
-
+        try {
+            require('fs').writeFileSync('debug_stage2.html', html);
+        } catch (err) {
+            console.error('Debug file write error:', err);
+        }
         // 7. 转换为嵌套列表
         html = convertMsoListToNestedLists(html);
 
@@ -65,11 +85,7 @@ function cleanHtml(html) {
         html = html.replace(/<div[^>]*>/gi, '<p>');
         html = html.replace(/<\/div>/gi, '</p>');
 
-        try {
-            require('fs').writeFileSync('debug_stage1.html', html);
-        } catch (err) {
-            console.error('Debug file write error:', err);
-        }
+
         // 12. 清理标签
         html = cleanEmptyTags(html);
 
@@ -86,6 +102,9 @@ function cleanHtml(html) {
             .replace(/<s>([\s\S]*?)<\/s>/gi, '$1');
         // 清理属性
         html = cleanClassAndIdAttributes(html);
+
+        // 清理样式
+        html = cleanAllStyles(html);
 
 
 
@@ -284,6 +303,67 @@ function cleanSelectiveStyles(html) {
     }
 }
 
+
+
+function cleanAllStyles(html) {
+    if (!html) return '';
+
+    try {
+        const dom = new JSDOM(`<!DOCTYPE html><html><body>${html}</body></html>`);
+        const document = dom.window.document;
+
+        // Find all elements with style attributes
+        const styledElements = document.querySelectorAll('[style]');
+        const stylesWithContent = [];
+
+        styledElements.forEach(element => {
+            stylesWithContent.push({
+                tag: element.tagName.toLowerCase(),
+                style: element.getAttribute('style'),
+                content: element.innerHTML,
+                path: getElementPath(element)
+            });
+            // Remove the style attribute
+            element.removeAttribute('style');
+        });
+
+        // Store styles with their content in database
+        if (stylesWithContent.length > 0) {
+            // TODO: Implement database storage for styles and content
+            console.log('Extracted style data to be stored:', stylesWithContent);
+        }
+
+        return document.body.innerHTML;
+    } catch (error) {
+        console.error('Style cleaning error:', error);
+        return html;
+    }
+}
+
+// Helper function to get unique element path
+function getElementPath(element) {
+    const path = [];
+    while (element && element.parentElement && element.parentElement.tagName !== 'BODY') {
+        let selector = element.tagName.toLowerCase();
+        if (element.id) {
+            selector += '#' + element.id;
+        } else {
+            // Get the index among siblings of same type
+            let index = 1;
+            let sibling = element.previousElementSibling;
+            while (sibling) {
+                if (sibling.tagName === element.tagName) {
+                    index++;
+                }
+                sibling = sibling.previousElementSibling;
+            }
+            selector += `:nth-of-type(${index})`;
+        }
+        path.unshift(selector);
+        element = element.parentElement;
+    }
+    return path.join(' > ');
+}
 
 /**
  * 动态分析列表层级并添加对应的class

@@ -1,2 +1,3 @@
-debug_stage1.html
+debug_stage*
+node_modules
 /debug/*
