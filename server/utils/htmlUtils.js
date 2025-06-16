@@ -46,6 +46,8 @@ function cleanHtml(html) {
             // 移除 Word 特有的 class
             .replace(/class="?Mso[a-zA-Z]+"/g, '');
 
+        // 移除带有tdoc-data-src的div完整结构
+        html = html.replace(/<div[^>]*tdoc-data-src="[^"]*"[^>]*>.*?<\/div>/gi, '');
 
         // 生成debug文件以查看第一阶段处理结果
         // 4. 清理样式，只保留指定样式
@@ -374,54 +376,89 @@ function addListLevelClasses(html) {
     if (!html) return '';
 
     try {
-        const marginValues = new Set(); // 存储所有不同的margin-left值
-        const marginMap = new Map();    // 存储margin值到层级的映射
+        // 先检查所有mso-list的level值
+        const levelRegex = /mso-list:\s*l\d+\s+level(\d+)/i;
+        const levels = new Set();
 
-        // 第一遍扫描：收集所有不同的margin-left值
-        let processedHtml = html.replace(/<p[^>]*style="([^"]*)"[^>]*>/gi, (match, style) => {
+        // 第一遍扫描：收集所有level值
+        html.replace(/<p[^>]*style="([^"]*)"[^>]*>/gi, (match, style) => {
             if (style.includes('mso-list:')) {
-                const marginMatch = style.match(/margin-left:\s*([0-9.]+)([a-z%]*)/i);
-                if (marginMatch) {
-                    const [, value, unit] = marginMatch;
-                    marginValues.add(value + unit);
+                const levelMatch = style.match(levelRegex);
+                if (levelMatch) {
+                    levels.add(parseInt(levelMatch[1]));
                 }
             }
-            return match;
         });
 
-        // 将margin值排序并建立映射关系
-        const sortedMargins = Array.from(marginValues).sort((a, b) => {
-            const valueA = parseFloat(a);
-            const valueB = parseFloat(b);
-            return valueA - valueB;
-        });
+        // 如果所有项都是level1或都是相同level，使用原有逻辑
+        if (levels.size === 1 && levels.has(1)) {
+            const marginValues = new Set();
+            const marginMap = new Map();
 
-        // 建立margin值到层级的映射
-        sortedMargins.forEach((margin, index) => {
-            marginMap.set(margin, index + 1);
-        });
-
-        // 第二遍扫描：添加层级class
-        processedHtml = processedHtml.replace(/<p([^>]*?)style="([^"]*)"([^>]*?)>/gi, (match, before, style, after) => {
-            if (style.includes('mso-list:')) {
-                const marginMatch = style.match(/margin-left:\s*([0-9.]+[a-z%]*)/i);
-                if (marginMatch) {
-                    const margin = marginMatch[1];
-                    const level = marginMap.get(margin);
-                    const levelClass = `list-level-${level}`;
-
-                    // 检查是否已经有class属性
-                    if (match.includes('class="')) {
-                        return match.replace(/class="([^"]*)"/, `class="$1 ${levelClass}"`);
-                    } else {
-                        return `<p${before}style="${style}" class="${levelClass}"${after}>`;
+            // 原有逻辑：第一遍扫描收集margin-left值
+            let processedHtml = html.replace(/<p[^>]*style="([^"]*)"[^>]*>/gi, (match, style) => {
+                if (style.includes('mso-list:')) {
+                    const marginMatch = style.match(/margin-left:\s*([0-9.]+)([a-z%]*)/i);
+                    if (marginMatch) {
+                        const [, value, unit] = marginMatch;
+                        marginValues.add(value + unit);
                     }
                 }
-            }
-            return match;
-        });
+                return match;
+            });
 
-        return processedHtml;
+            // 原有逻辑：将margin值排序并建立映射关系
+            const sortedMargins = Array.from(marginValues).sort((a, b) => {
+                const valueA = parseFloat(a);
+                const valueB = parseFloat(b);
+                return valueA - valueB;
+            });
+
+            sortedMargins.forEach((margin, index) => {
+                marginMap.set(margin, index + 1);
+            });
+
+            // 原有逻辑：第二遍扫描添加层级class
+            processedHtml = processedHtml.replace(/<p([^>]*?)style="([^"]*)"([^>]*?)>/gi, (match, before, style, after) => {
+                if (style.includes('mso-list:')) {
+                    const marginMatch = style.match(/margin-left:\s*([0-9.]+[a-z%]*)/i);
+                    if (marginMatch) {
+                        const margin = marginMatch[1];
+                        const level = marginMap.get(margin);
+                        const levelClass = `list-level-${level}`;
+
+                        // 检查是否已经有class属性
+                        if (match.includes('class="')) {
+                            return match.replace(/class="([^"]*)"/, `class="$1 ${levelClass}"`);
+                        } else {
+                            return `<p${before}style="${style}" class="${levelClass}"${after}>`;
+                        }
+                    }
+                }
+                return match;
+            });
+
+            return processedHtml;
+        } else {
+            // 使用mso-list中的level值直接作为class level
+            return html.replace(/<p([^>]*?)style="([^"]*)"([^>]*?)>/gi, (match, before, style, after) => {
+                if (style.includes('mso-list:')) {
+                    const levelMatch = style.match(levelRegex);
+                    if (levelMatch) {
+                        const level = levelMatch[1];
+                        const levelClass = `list-level-${level}`;
+
+                        // 检查是否已经有class属性
+                        if (match.includes('class="')) {
+                            return match.replace(/class="([^"]*)"/, `class="$1 ${levelClass}"`);
+                        } else {
+                            return `<p${before}style="${style}" class="${levelClass}"${after}>`;
+                        }
+                    }
+                }
+                return match;
+            });
+        }
     } catch (error) {
         console.error('添加列表层级class错误:', error);
         return html;
@@ -474,8 +511,22 @@ function convertMsoListToNestedLists(html) {
     try {
         const dom = new JSDOM(`<!DOCTYPE html><html><body>${html}</body></html>`);
         const document = dom.window.document;
-        const body = document.body;
 
+        // 规范地处理document和section结构
+        const documentDiv = document.querySelector('div.document');
+        if (documentDiv) {
+            const sectionDiv = documentDiv.querySelector('div.section');
+            if (sectionDiv) {
+                // 将section的内容移到body中
+                while (sectionDiv.firstChild) {
+                    documentDiv.parentNode.insertBefore(sectionDiv.firstChild, documentDiv);
+                }
+                // 移除空的document和section div
+                documentDiv.remove();
+            }
+        }
+
+        const body = document.body;
         // 新建一个数组用于收集最终的节点顺序
         const newNodes = [];
         let buffer = [];
@@ -490,6 +541,7 @@ function convertMsoListToNestedLists(html) {
             let currentListType = 'ul';
             for (let i = 0; i < buffer.length; i++) {
                 const para = buffer[i];
+
                 const levelMatch = para.getAttribute('class')?.match(/list-level-(\d+)/);
                 const level = levelMatch ? parseInt(levelMatch[1]) : 1;
                 const listType = getListType(para);
@@ -500,6 +552,7 @@ function convertMsoListToNestedLists(html) {
                 const content = para.innerHTML.trim();
                 const li = document.createElement('li');
                 li.innerHTML = content;
+                console.log('\nProcessing list item %d:\n', i + 1, li);
                 if (level === 1) {
                     if (!rootList || previousLevel === 0) {
                         rootList = document.createElement(listType);
