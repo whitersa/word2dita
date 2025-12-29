@@ -155,7 +155,8 @@ function formatHtml(html) {
         const tags = html.split(/(<\/?[^>]+>)/g);
 
         // 处理每个标签
-        for (let tag of tags) {
+        for (let i = 0; i < tags.length; i++) {
+            let tag = tags[i];
             if (!tag.trim()) continue;
 
             // 处理结束标签
@@ -169,10 +170,39 @@ function formatHtml(html) {
             }
             // 处理开始标签
             else if (tag.startsWith('<')) {
-                formatted += '  '.repeat(indent) + tag + '\n';
-                // 不增加缩进的标签
-                if (!tag.match(/<(br|hr|img|input|link|meta|area|base|col|command|embed|keygen|param|source|track|wbr)/i)) {
-                    indent++;
+                // 检查是否是空元素（即紧接着就是结束标签，或者中间只有空白）
+                let nextNonEmptyIndex = -1;
+                for (let j = i + 1; j < tags.length; j++) {
+                    if (tags[j].trim()) {
+                        nextNonEmptyIndex = j;
+                        break;
+                    }
+                }
+
+                let isEmptyPair = false;
+                // 获取当前标签名
+                const tagNameMatch = tag.match(/^<([^\s>]+)/);
+                const tagName = tagNameMatch ? tagNameMatch[1] : '';
+
+                if (nextNonEmptyIndex !== -1 && tagName) {
+                    const nextTag = tags[nextNonEmptyIndex];
+                    if (nextTag.startsWith('</')) {
+                        const closeTagNameMatch = nextTag.match(/^<\/([^\s>]+)/);
+                        if (closeTagNameMatch && closeTagNameMatch[1] === tagName) {
+                            isEmptyPair = true;
+                        }
+                    }
+                }
+
+                if (isEmptyPair) {
+                    formatted += '  '.repeat(indent) + tag + tags[nextNonEmptyIndex] + '\n';
+                    i = nextNonEmptyIndex; // 跳过结束标签
+                } else {
+                    formatted += '  '.repeat(indent) + tag + '\n';
+                    // 不增加缩进的标签
+                    if (!tag.match(/<(br|hr|img|input|link|meta|area|base|col|command|embed|keygen|param|source|track|wbr)/i)) {
+                        indent++;
+                    }
                 }
             }
             // 处理文本内容

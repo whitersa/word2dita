@@ -1,6 +1,6 @@
 const fs = require('fs').promises;
 const path = require('path');
-const { cleanHtml, formatHtml, } = require('../utils/htmlUtils');
+const { cleanHtml, formatHtml, } = require('../utils/htmlUtilsDita');
 
 // 定义基础路径
 const BASE_DIR = path.join(__dirname, '../..');
